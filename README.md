@@ -64,6 +64,8 @@ download** is included for bug reports.
    If a supported fridge is on your network you can also just accept the
    **"Zee Refrigerator found"** discovery card — no IP typing needed.
 2. Choose a setup method:
+   - **Search the network for the fridge** — scans the LAN (ARP + UDISCOVERY) for
+     Haier appliances and lists them; pick yours and the address is filled in for you.
    - **Enter local key manually** — paste the fridge's current local key (see
      [Getting the local key](#getting-the-local-key)). Works immediately.
    - **Sign in with Haier account** — email/phone + password + the **country the

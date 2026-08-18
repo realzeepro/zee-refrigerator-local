@@ -40,6 +40,7 @@ from .const import (
 )
 from .countries import COUNTRY_DIAL_CODES, default_dial_code
 from .decode import build_layout
+from .discovery import async_scan_for_appliances
 from .vendor.haismart_extractor import GatewayCreds, GatewayError, HaierCloud, get_localkey_via_gateway
 from .vendor.haismart_extractor.cloud import SEA_APP_CREDENTIALS, CloudError
 from .vendor.haismart_hrdp import async_query, async_read_status
@@ -49,12 +50,16 @@ if TYPE_CHECKING:  # only used as a type annotation; the class moved modules in 
 
 _LOGGER = logging.getLogger(__name__)
 
+SETUP_METHODS = {
+    "manual": "Enter local key manually",
+    "account": "Sign in with Haier account",
+    "scan": "Search the network for the fridge",
+}
+
 STEP_USER_SCHEMA = vol.Schema(
     {
-        vol.Required("host"): str,
-        vol.Required("setup_method", default="manual"): vol.In(
-            {"manual": "Enter local key manually", "account": "Sign in with Haier account"}
-        ),
+        vol.Optional("host", default=""): str,
+        vol.Required("setup_method", default="manual"): vol.In(SETUP_METHODS),
     }
 )
 
@@ -94,6 +99,7 @@ class HaierFridgeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def __init__(self) -> None:
         self._host: str | None = None
         self._device_id: str | None = None
+        self._found_devices: list[Any] = []
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -101,21 +107,60 @@ class HaierFridgeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            self._host = user_input["host"]
-            info = await async_query(self._host)
-            if info is None:
-                errors["base"] = "cannot_connect"
+            self._host = (user_input.get("host") or "").strip()
+            method = user_input["setup_method"]
+
+            if method == "scan":
+                return await self.async_step_scan()
+            if not self._host:
+                errors["base"] = "host_required"
             else:
-                self._device_id = info.device_id
-                await self.async_set_unique_id(info.device_id)
-                self._abort_if_unique_id_configured(updates={"host": self._host})
-                if user_input["setup_method"] == "account":
-                    return await self.async_step_account()
-                return await self.async_step_manual_key()
+                info = await async_query(self._host)
+                if info is None:
+                    errors["base"] = "cannot_connect"
+                else:
+                    self._device_id = info.device_id
+                    await self.async_set_unique_id(info.device_id)
+                    self._abort_if_unique_id_configured(updates={"host": self._host})
+                    if method == "account":
+                        return await self.async_step_account()
+                    return await self.async_step_manual_key()
 
         return self.async_show_form(
             step_id="user", data_schema=STEP_USER_SCHEMA, errors=errors
         )
+
+    async def async_step_scan(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Find Haier appliances on the LAN (ARP/UDISCOVERY) and let the user pick one."""
+        if user_input is None or "device_id" not in user_input:
+            devices = await async_scan_for_appliances(self.hass)
+            if not devices:
+                # resubmitting the empty form re-runs the scan
+                return self.async_show_form(
+                    step_id="scan",
+                    data_schema=vol.Schema({}),
+                    errors={"base": "none_found"},
+                )
+            self._found_devices = devices
+            options = {d.device_id: f"{d.host} ({d.device_id})" for d in devices}
+            return self.async_show_form(
+                step_id="scan",
+                data_schema=vol.Schema({vol.Required("device_id"): vol.In(options)}),
+            )
+
+        picked = next(
+            (d for d in self._found_devices if d.device_id == user_input["device_id"]),
+            None,
+        )
+        if picked is None:
+            return self.async_abort(reason="cannot_connect")
+        self._host = picked.host
+        self._device_id = picked.device_id
+        await self.async_set_unique_id(picked.device_id)
+        self._abort_if_unique_id_configured(updates={"host": picked.host})
+        return await self.async_step_discovery_confirm()
 
     async def async_step_dhcp(self, discovery_info: DhcpServiceInfo) -> FlowResult:
         """Handle a DHCP-discovered Haier fridge: ask it who it is, then set up."""

@@ -30,3 +30,33 @@ MANUFACTURER = "Haier"
 MODEL = "HRF-538TIFB1U1"
 
 DEFAULT_STATUS_LEN = 151
+
+# Haier Wi-Fi module MAC prefixes (the deviceId IS the Wi-Fi module's MAC). Used for
+# DHCP discovery (see manifest.json) and for the in-wizard ARP/UDISCOVERY scan.
+HAIER_OUIS: tuple[str, ...] = (
+    "0007A8",
+    "00258D",
+    "0439CB",
+    "04C9DE",
+    "04E229",
+    "04FA83",
+    "145790",
+    "18A7F1",
+    "24E8CE",
+    "2C37C5",
+    "3412DC",
+    "3429EF",
+    "3C1640",
+    "4448FF",
+    "540853",
+    "5C241F",
+    "60B02B",
+    "68E478",
+    "94224C",
+    "A08222",
+    "AC8226",
+    "ACB722",
+    "D8E23F",
+    "DC330E",
+    "E8EAFA",
+)

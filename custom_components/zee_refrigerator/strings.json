@@ -23,6 +23,13 @@
           "setup_method": "Setup method"
         }
       },
+      "scan": {
+        "title": "Search the network",
+        "description": "Looking for Haier appliances on your local network. Pick your fridge below, or press Back and enter its IP address instead.",
+        "data": {
+          "device_id": "Fridge"
+        }
+      },
       "account": {
         "title": "Sign in with your Haier account",
         "description": "Used only to fetch the local key and to automatically re-fetch it when it rotates. Only a durable token is stored \u2014 your password is never saved. The country is where the account was registered, not where you live or where the fridge is.",
@@ -35,8 +42,10 @@
     },
     "error": {
       "cannot_connect": "Could not reach the fridge at that IP (UDP discovery failed), or could not reach Haier's cloud.",
+      "host_required": "Enter the fridge's IP address, or choose Search the network for the fridge.",
       "invalid_key": "Could not decrypt a status report with this key. It may be stale \u2014 re-fetch the current local key.",
       "no_status_report": "Connected, but no 151-byte status report was received.",
+      "none_found": "No Haier appliances answered on this network. Make sure the fridge is powered on and on the same network, then try again, or enter its IP address manually.",
       "invalid_auth": "Sign-in failed \u2014 check your email/phone and password.",
       "invalid_auth_detail": "Sign-in failed: {detail}. Check your email/phone and password, or that this account is registered on the Haier SE-Asia cloud used by the Haismart app.",
       "key_fetch_failed": "Signed in, but fetching the local key from the cloud gateway failed."
