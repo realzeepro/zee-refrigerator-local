@@ -1,0 +1,11 @@
+{
+  "domain": "zee_refrigerator",
+  "name": "Zee Refrigerator Local Integration",
+  "codeowners": ["@realzeepro"],
+  "config_flow": true,
+  "documentation": "https://github.com/realzeepro/zee-refrigerator-local",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/realzeepro/zee-refrigerator-local/issues",
+  "requirements": ["cryptography>=41"],
+  "version": "0.1.6"
+}
