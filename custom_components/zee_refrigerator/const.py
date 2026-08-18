@@ -7,6 +7,11 @@ CONF_LOCAL_KEY = "local_key"
 CONF_DEVICE_ID = "device_id"
 CONF_LOCALKEY_VERSION = "localkey_version"
 
+CONF_SCAN_INTERVAL = "scan_interval"
+CONF_STATUS_LEN = "status_len"
+CONF_LAYOUT = "layout"
+CONF_MODEL = "model"
+
 # Optional Haier cloud account, used only to auto-refresh the local key when it rotates.
 # We store a durable refresh_token (minted at login), never the account password.
 CONF_REFRESH_TOKEN = "refresh_token"
@@ -20,8 +25,8 @@ DEFAULT_SCAN_INTERVAL = 30  # seconds; matches the fridge's single-session poll 
 DEFAULT_TIMEOUT = 8.0  # seconds per read cycle
 
 MANUFACTURER = "Haier"
-# This layout was reverse-engineered against a single unit. If your fridge reports
+# This layout was derived against a single unit. If your fridge reports
 # different values, please open an issue with a raw status capture.
 MODEL = "HRF-538TIFB1U1"
 
-STATUS_LEN = 151
+DEFAULT_STATUS_LEN = 151

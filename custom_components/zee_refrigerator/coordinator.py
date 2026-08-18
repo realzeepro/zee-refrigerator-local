@@ -8,6 +8,7 @@ the user to re-key by hand via Settings > Devices > Zee Refrigerator > Configure
 """
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import replace
 from datetime import timedelta
@@ -27,14 +28,20 @@ from .const import (
     CONF_DEVICE_ID,
     CONF_LOCAL_KEY,
     CONF_LOCALKEY_VERSION,
+    CONF_LAYOUT,
+    CONF_MODEL,
     CONF_REFRESH_TOKEN,
+    CONF_SCAN_INTERVAL,
+    CONF_STATUS_LEN,
     CONF_ZONE_INFO,
     DEFAULT_SCAN_INTERVAL,
+    DEFAULT_STATUS_LEN,
     DEFAULT_TIMEOUT,
     DOMAIN,
     GATEWAY_TIMEOUT,
+    MODEL,
 )
-from .decode import FridgeStatus, decode
+from .decode import FridgeStatus, build_layout, decode, default_layout
 from .vendor.haismart_extractor import GatewayCreds, GatewayError, HaierCloud, get_localkey_via_gateway
 from .vendor.haismart_extractor.cloud import SEA_APP_CREDENTIALS, CloudError
 from .vendor.haismart_hrdp import LocalKeyRotated, async_read_status
@@ -60,7 +67,7 @@ class HaierFridgeCoordinator(DataUpdateCoordinator[FridgeStatus]):
             _LOGGER,
             name=DOMAIN,
             update_interval=timedelta(
-                seconds=entry.options.get("scan_interval", DEFAULT_SCAN_INTERVAL)
+                seconds=entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
             ),
         )
         self.entry = entry
@@ -69,6 +76,24 @@ class HaierFridgeCoordinator(DataUpdateCoordinator[FridgeStatus]):
         self.local_key: str = entry.data[CONF_LOCAL_KEY]
         self.localkey_version: int | None = entry.data.get(CONF_LOCALKEY_VERSION)
         self.last_raw_status: str | None = None
+        self.seen_lengths: list[int] = []
+
+        options = entry.options
+        self.status_len = int(options.get(CONF_STATUS_LEN, DEFAULT_STATUS_LEN))
+        layout_json = options.get(CONF_LAYOUT)
+        if layout_json:
+            try:
+                self.layout = build_layout(json.loads(layout_json))
+            except (ValueError, TypeError):
+                _LOGGER.warning(
+                    "Ignoring invalid layout override in options; using the default layout"
+                )
+                self.layout = default_layout()
+            else:
+                self.status_len = self.layout["status_len"]
+        else:
+            self.layout = default_layout()
+        self.model: str = options.get(CONF_MODEL) or MODEL
 
     async def _async_update_data(self) -> FridgeStatus:
         try:
@@ -105,12 +130,25 @@ class HaierFridgeCoordinator(DataUpdateCoordinator[FridgeStatus]):
         except (OSError, TimeoutError, RuntimeError) as exc:
             raise UpdateFailed(f"Error communicating with fridge: {exc}") from exc
 
+        self.seen_lengths = sorted({len(blob) for blob in blobs})
         self.last_raw_status = next(
-            (blob.hex() for blob in blobs if len(blob) == 151), None
+            (blob.hex() for blob in blobs if len(blob) == self.status_len), None
         )
-        status = next((decode(blob) for blob in blobs if len(blob) == 151), None)
+        status = next(
+            (
+                decode(blob, self.layout)
+                for blob in blobs
+                if len(blob) == self.status_len
+            ),
+            None,
+        )
         if status is None:
-            raise UpdateFailed("Fridge did not return a recognisable status report")
+            raise UpdateFailed(
+                f"Fridge returned no decodable status (report lengths seen: "
+                f"{self.seen_lengths}; expected {self.status_len} bytes). "
+                f"This model's report layout may differ — set the byte map under "
+                f"Options, or open an issue with the diagnostics download."
+            )
         return status
 
     async def _async_gateway_refresh(self) -> bool:

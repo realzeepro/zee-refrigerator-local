@@ -16,6 +16,13 @@
           "local_key": "Local key"
         }
       },
+      "discovery_confirm": {
+        "title": "Zee Refrigerator found",
+        "description": "Found a Haier fridge at {host} (device {device}). Choose how to set up the local key.",
+        "data": {
+          "setup_method": "Setup method"
+        }
+      },
       "account": {
         "title": "Sign in with your Haier account",
         "description": "Used only to fetch the local key and to automatically re-fetch it when it rotates. Only a durable token is stored \u2014 your password is never saved. The country is where the account was registered, not where you live or where the fridge is.",
@@ -35,27 +42,33 @@
       "key_fetch_failed": "Signed in, but fetching the local key from the cloud gateway failed."
     },
     "abort": {
-      "already_configured": "This fridge is already configured."
+      "already_configured": "This fridge is already configured.",
+      "cannot_connect": "Could not reach the fridge at the discovered address."
     }
   },
   "options": {
     "step": {
       "init": {
         "title": "Zee Refrigerator options",
-        "description": "Leave the key and account fields blank to just change the poll interval.",
+        "description": "Leave the key and account fields blank to just change the poll interval. The status length and byte map are advanced settings for other fridge models.",
         "data": {
           "scan_interval": "Poll interval (seconds)",
           "local_key": "New local key (manual re-key)",
           "login_id": "Haier account email/phone (link account for auto re-key)",
           "password": "Haier account password",
-          "zone_info": "Country/region where the account was registered"
+          "zone_info": "Country/region where the account was registered",
+          "status_len": "Status report length (bytes)",
+          "layout": "Byte map (JSON, e.g. {\"fridge_temp\":92})",
+          "model": "Model name (shown on the device)"
         }
       }
     },
     "error": {
       "invalid_key": "Could not decrypt a status report with this key.",
-      "no_status_report": "Connected, but no 151-byte status report was received.",
-      "invalid_auth": "Sign-in failed \u2014 check your email/phone and password, or the local key fetch failed."
+      "no_status_report": "Connected, but no status report of the expected length was received.",
+      "invalid_auth": "Sign-in failed \u2014 check your email/phone and password, or the local key fetch failed.",
+      "invalid_status_len": "Status report length must be between 1 and 512 bytes.",
+      "invalid_layout": "The byte map is not valid JSON, or contains invalid field values."
     }
   },
   "issues": {

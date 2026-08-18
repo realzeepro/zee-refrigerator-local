@@ -22,6 +22,10 @@ async def async_get_config_entry_diagnostics(
     coordinator: HaierFridgeCoordinator = hass.data[DOMAIN][entry.entry_id]
     return {
         "entry": {k: v for k, v in entry.data.items() if k not in TO_REDACT},
+        "options": dict(entry.options),
+        "status_len": coordinator.status_len,
+        "layout": coordinator.layout,
+        "seen_report_lengths": coordinator.seen_lengths,
         "last_raw_status": coordinator.last_raw_status,
         "decoded_status": coordinator.data,
     }

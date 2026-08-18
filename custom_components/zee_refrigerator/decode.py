@@ -1,14 +1,20 @@
-"""Decode the Haier HRF-538TIFB1U1's 151-byte local status report.
+"""Decode the Haier 538 IOT refrigerator's local status report.
 
-This layout was reverse-engineered by diffing raw status captures against known
-app-side state changes (door open/close, Super Freeze, Super Cool). It is specific
-to this fridge's device_type (0102400W / product_code BL046RE00) and is NOT part of
-the upstream haismart-hrdp profile database, which only knows AC report layouts.
+The default layout targets the HRF-538TIFB1U1 (device_type 0102400W / product code
+BL046RE00) — a fixed 151-byte report whose field offsets were identified by diffing
+raw status captures against known app-side state changes (door open/close, Super
+Freeze, Super Cool). It is NOT part of the upstream haismart-hrdp profile database,
+which only knows AC report layouts.
 
-If your fridge reports different numbers than the Haismart app, please open an
-issue on the integration's repo with a raw status hex dump (see diagnostics).
+Other Haier fridges will almost certainly use a different report length and/or
+offsets. This decoder is therefore layout-driven: ``decode(blob, layout)`` reads
+whatever offsets the layout specifies, applies each field's formula, and rejects
+values that fall outside a field's plausibility bounds (so a wrong layout reports
+"no decodable status" instead of silently wrong numbers). A user can paste a
+capture-derived byte map in the integration's Options flow — no code changes
+needed.
 
-Byte map (0-indexed):
+Byte map for the default 538 layout (0-indexed):
     92   fridge actual temp   = byte - 38          (°C)
     93   freezer actual temp  = byte - 38           (°C)
     98   fridge target temp   = (byte + 1) / 2       (°C)
@@ -20,9 +26,63 @@ Byte map (0-indexed):
 """
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import Any, TypedDict
 
-from .const import STATUS_LEN
+from .const import DEFAULT_STATUS_LEN
+
+_LAYOUT_FIELDS = (
+    "fridge_temp",
+    "freezer_temp",
+    "fridge_target",
+    "freezer_target",
+    "eco",
+    "auto_set",
+    "super_freeze",
+    "super_cool",
+    "fridge_door",
+    "freezer_door",
+)
+
+
+def default_layout() -> dict[str, Any]:
+    """The layout the HRF-538TIFB1U1 was tested with, as a fresh dict (never mutated)."""
+    return {
+        "status_len": DEFAULT_STATUS_LEN,
+        "fridge_temp": {"offset": 92, "scale": 1.0, "shift": -38.0, "min": -60.0, "max": 60.0},
+        "freezer_temp": {"offset": 93, "scale": 1.0, "shift": -38.0, "min": -60.0, "max": 30.0},
+        "fridge_target": {"offset": 98, "scale": 0.5, "shift": 0.5, "min": -20.0, "max": 30.0},
+        "freezer_target": {"offset": 99, "scale": 0.5, "shift": -26.0, "min": -40.0, "max": 15.0},
+        "eco": {"offset": 104, "mask": 0x04},
+        "auto_set": {"offset": 105, "mask": 0x02},
+        "super_freeze": {"offset": 105, "mask": 0x08},
+        "super_cool": {"offset": 105, "mask": 0x10},
+        "fridge_door": {"offset": 107, "mask": 0x01},
+        "freezer_door": {"offset": 107, "mask": 0x02},
+    }
+
+
+def build_layout(override: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Merge a user-supplied byte map onto the default layout.
+
+    ``override`` uses the same keys as the default layout. A numeric value means
+    "same field, different offset" (``{"fridge_temp": 100}``); a dict is deep-merged
+    (``{"fridge_temp": {"offset": 100, "min": -70}}``) so any unspecified part of the
+    field spec keeps its default. ``status_len`` overrides the expected report length.
+    """
+    layout = default_layout()
+    if not override:
+        return layout
+    if "status_len" in override:
+        layout["status_len"] = int(override["status_len"])
+    for name in _LAYOUT_FIELDS:
+        if name not in override:
+            continue
+        user = override[name]
+        if isinstance(user, dict):
+            layout[name].update(user)
+        else:
+            layout[name]["offset"] = int(user)
+    return layout
 
 
 class FridgeStatus(TypedDict):
@@ -49,20 +109,42 @@ _MODE_PRIORITY = (
 )
 
 
-def decode(blob: bytes) -> FridgeStatus | None:
-    """Decode a raw status blob. Returns None if the blob isn't a 151-byte status report."""
-    if len(blob) != STATUS_LEN:
+def _read_temp(blob: bytes, spec: dict[str, Any]) -> float | None:
+    value = blob[spec["offset"]] * spec["scale"] + spec["shift"]
+    if value < spec["min"] or value > spec["max"]:
+        return None
+    return float(value)
+
+
+def _read_flag(blob: bytes, spec: dict[str, Any]) -> bool:
+    return bool(blob[spec["offset"]] & spec["mask"])
+
+
+def decode(
+    blob: bytes, layout: dict[str, Any] | None = None
+) -> FridgeStatus | None:
+    """Decode a raw status blob with the given layout (default = the 538 layout).
+
+    Returns ``None`` when the blob is not the layout's expected length, or when a
+    temperature falls outside its plausibility bounds (a strong sign the layout does
+    not match this model).
+    """
+    layout = layout or default_layout()
+    if len(blob) != layout["status_len"]:
         return None
 
-    mode_flags_104 = blob[104]
-    mode_flags_105 = blob[105]
-    door_flags = blob[107]
+    fridge_temp = _read_temp(blob, layout["fridge_temp"])
+    freezer_temp = _read_temp(blob, layout["freezer_temp"])
+    fridge_target = _read_temp(blob, layout["fridge_target"])
+    freezer_target = _read_temp(blob, layout["freezer_target"])
+    if None in (fridge_temp, freezer_temp, fridge_target, freezer_target):
+        return None
 
     flags = {
-        "eco": bool(mode_flags_104 & 0b0100),
-        "auto_set": bool(mode_flags_105 & 0b0010),
-        "super_freeze": bool(mode_flags_105 & 0b1000),
-        "super_cool": bool(mode_flags_105 & 0b10000),
+        "eco": _read_flag(blob, layout["eco"]),
+        "auto_set": _read_flag(blob, layout["auto_set"]),
+        "super_freeze": _read_flag(blob, layout["super_freeze"]),
+        "super_cool": _read_flag(blob, layout["super_cool"]),
     }
 
     mode = next(
@@ -71,12 +153,12 @@ def decode(blob: bytes) -> FridgeStatus | None:
     )
 
     return FridgeStatus(
-        fridge_temp_c=float(blob[92] - 38),
-        freezer_temp_c=float(blob[93] - 38),
-        fridge_target_c=(blob[98] + 1) / 2,
-        freezer_target_c=blob[99] / 2 - 26,
-        fridge_door_open=bool(door_flags & 0b0001),
-        freezer_door_open=bool(door_flags & 0b0010),
+        fridge_temp_c=fridge_temp,
+        freezer_temp_c=freezer_temp,
+        fridge_target_c=fridge_target,
+        freezer_target_c=freezer_target,
+        fridge_door_open=_read_flag(blob, layout["fridge_door"]),
+        freezer_door_open=_read_flag(blob, layout["freezer_door"]),
         eco=flags["eco"],
         auto_set=flags["auto_set"],
         super_freeze=flags["super_freeze"],

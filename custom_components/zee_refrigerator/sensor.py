@@ -17,7 +17,7 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, MANUFACTURER, MODEL
+from .const import DOMAIN, MANUFACTURER
 from .coordinator import HaierFridgeCoordinator
 from .decode import FridgeStatus
 
@@ -93,7 +93,7 @@ class FridgeSensor(CoordinatorEntity[HaierFridgeCoordinator], SensorEntity):
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, coordinator.device_id)},
             manufacturer=MANUFACTURER,
-            model=MODEL,
+            model=coordinator.model,
             name="Zee Refrigerator",
         )
 

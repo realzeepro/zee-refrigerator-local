@@ -9,12 +9,14 @@ Two ways to set up:
 """
 from __future__ import annotations
 
+import json
 import logging
 from functools import partial
 from typing import Any
 
 import voluptuous as vol
 from homeassistant import config_entries
+from homeassistant.components.dhcp import DhcpServiceInfo
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
 
@@ -23,16 +25,22 @@ from .const import (
     CONF_ACCESS_TOKEN,
     CONF_CLOUD_CLIENT_ID,
     CONF_DEVICE_ID,
+    CONF_LAYOUT,
     CONF_LOCAL_KEY,
     CONF_LOCALKEY_VERSION,
+    CONF_MODEL,
     CONF_REFRESH_TOKEN,
+    CONF_SCAN_INTERVAL,
+    CONF_STATUS_LEN,
     CONF_ZONE_INFO,
     DEFAULT_SCAN_INTERVAL,
+    DEFAULT_STATUS_LEN,
     DEFAULT_TIMEOUT,
     DOMAIN,
     GATEWAY_TIMEOUT,
 )
 from .countries import COUNTRY_DIAL_CODES, default_dial_code
+from .decode import build_layout
 from .vendor.haismart_extractor import GatewayCreds, GatewayError, HaierCloud, get_localkey_via_gateway
 from .vendor.haismart_extractor.cloud import SEA_APP_CREDENTIALS, CloudError
 from .vendor.haismart_hrdp import async_query, async_read_status
@@ -107,6 +115,40 @@ class HaierFridgeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="user", data_schema=STEP_USER_SCHEMA, errors=errors
         )
 
+    async def async_step_dhcp(self, discovery_info: DhcpServiceInfo) -> FlowResult:
+        """Handle a DHCP-discovered Haier fridge: ask it who it is, then set up."""
+        info = await async_query(discovery_info.ip)
+        if info is None:
+            return self.async_abort(reason="cannot_connect")
+        self._host = discovery_info.ip
+        self._device_id = info.device_id
+        await self.async_set_unique_id(info.device_id)
+        self._abort_if_unique_id_configured(updates={"host": discovery_info.ip})
+        return await self.async_step_discovery_confirm()
+
+    async def async_step_discovery_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """A Haier fridge was found on the network; pick how to supply the key."""
+        if user_input is not None:
+            if user_input["setup_method"] == "account":
+                return await self.async_step_account()
+            return await self.async_step_manual_key()
+        return self.async_show_form(
+            step_id="discovery_confirm",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("setup_method", default="manual"): vol.In(
+                        {"manual": "Enter local key manually", "account": "Sign in with Haier account"}
+                    )
+                }
+            ),
+            description_placeholders={
+                "host": self._host or "",
+                "device": self._device_id or "",
+            },
+        )
+
     async def async_step_manual_key(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
@@ -122,7 +164,7 @@ class HaierFridgeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 _LOGGER.exception("Local key verification failed")
                 errors["base"] = "invalid_key"
             else:
-                if not any(len(b) == 151 for b in blobs):
+                if not any(len(b) == DEFAULT_STATUS_LEN for b in blobs):
                     errors["base"] = "no_status_report"
                 else:
                     return self.async_create_entry(
@@ -223,6 +265,20 @@ class HaierFridgeOptionsFlow(config_entries.OptionsFlow):
             password = user_input.get("password")
             data = {**self.config_entry.data}
 
+            status_len = int(user_input.get(CONF_STATUS_LEN) or DEFAULT_STATUS_LEN)
+            layout_json = (user_input.get(CONF_LAYOUT) or "").strip()
+            model = (user_input.get(CONF_MODEL) or "").strip()
+            if not 1 <= status_len <= 512:
+                errors["base"] = "invalid_status_len"
+            if layout_json:
+                try:
+                    parsed = json.loads(layout_json)
+                    if not isinstance(parsed, dict):
+                        raise ValueError("layout must be a JSON object")
+                    build_layout(parsed)
+                except (ValueError, TypeError):
+                    errors["base"] = "invalid_layout"
+
             if login_id and password:
                 zone = (
                     str(user_input.get(CONF_ZONE_INFO, "")).strip().lstrip("+")
@@ -271,7 +327,7 @@ class HaierFridgeOptionsFlow(config_entries.OptionsFlow):
                 except Exception:  # noqa: BLE001
                     errors["base"] = "invalid_key"
                 else:
-                    if not any(len(b) == 151 for b in blobs):
+                    if not any(len(b) == status_len for b in blobs):
                         errors["base"] = "no_status_report"
                     else:
                         data[CONF_LOCAL_KEY] = new_key
@@ -280,18 +336,26 @@ class HaierFridgeOptionsFlow(config_entries.OptionsFlow):
                 self.hass.config_entries.async_update_entry(
                     self.config_entry, data=data
                 )
-                return self.async_create_entry(
-                    title="",
-                    data={
-                        "scan_interval": user_input.get(
-                            "scan_interval", DEFAULT_SCAN_INTERVAL
-                        )
-                    },
-                )
+                options_data = {
+                    CONF_SCAN_INTERVAL: user_input.get(
+                        CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL
+                    ),
+                    CONF_STATUS_LEN: status_len,
+                }
+                if layout_json:
+                    options_data[CONF_LAYOUT] = layout_json
+                if model:
+                    options_data[CONF_MODEL] = model
+                return self.async_create_entry(title="", data=options_data)
 
         current_interval = self.config_entry.options.get(
-            "scan_interval", DEFAULT_SCAN_INTERVAL
+            CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL
         )
+        current_status_len = self.config_entry.options.get(
+            CONF_STATUS_LEN, DEFAULT_STATUS_LEN
+        )
+        current_layout = self.config_entry.options.get(CONF_LAYOUT, "")
+        current_model = self.config_entry.options.get(CONF_MODEL, "")
         default_zone = (
             self.config_entry.data.get(CONF_ZONE_INFO)
             or default_dial_code(self.hass.config.country)
@@ -300,11 +364,14 @@ class HaierFridgeOptionsFlow(config_entries.OptionsFlow):
             step_id="init",
             data_schema=vol.Schema(
                 {
-                    vol.Optional("scan_interval", default=current_interval): int,
+                    vol.Optional(CONF_SCAN_INTERVAL, default=current_interval): int,
                     vol.Optional(CONF_LOCAL_KEY): str,
                     vol.Optional("login_id"): str,
                     vol.Optional("password"): str,
                     vol.Optional(CONF_ZONE_INFO, default=default_zone): _country_select(),
+                    vol.Optional(CONF_STATUS_LEN, default=current_status_len): int,
+                    vol.Optional(CONF_LAYOUT, default=current_layout): str,
+                    vol.Optional(CONF_MODEL, default=current_model): str,
                 }
             ),
             errors=errors,
