@@ -12,11 +12,10 @@ from __future__ import annotations
 import json
 import logging
 from functools import partial
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import voluptuous as vol
 from homeassistant import config_entries
-from homeassistant.components.dhcp import DhcpServiceInfo
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
 
@@ -44,6 +43,9 @@ from .decode import build_layout
 from .vendor.haismart_extractor import GatewayCreds, GatewayError, HaierCloud, get_localkey_via_gateway
 from .vendor.haismart_extractor.cloud import SEA_APP_CREDENTIALS, CloudError
 from .vendor.haismart_hrdp import async_query, async_read_status
+
+if TYPE_CHECKING:  # only used as a type annotation; the class moved modules in HA 2025.6
+    from homeassistant.components.dhcp import DhcpServiceInfo
 
 _LOGGER = logging.getLogger(__name__)
 
