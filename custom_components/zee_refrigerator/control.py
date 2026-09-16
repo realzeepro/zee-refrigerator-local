@@ -21,7 +21,7 @@ product ``BL046RE00`` / device class ``0102400W`` (the map's own name is
 """
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from .const import TARGET_LEVEL_MAX, TARGET_LEVEL_MIN, WRITE_COMMANDS
@@ -69,3 +69,23 @@ def build_write_frame(name: str, value: Any) -> bytes:
     return build_epp_frame(
         FRAME_TYPE_CONTROL, bytes.fromhex(epp_cmd), raw.to_bytes(2, "big")
     )
+
+
+# The fridge refuses a target-level change while ANY of these modes is active. This is not a
+# guess: Haier's own device config for this class declares it, one ``modifiers`` rule per mode,
+# each setting ``refrigeratorTargetTempLevel`` to ``writable: false``. Order is only which name
+# we report when several are on at once (highest-priority rule first).
+TARGET_LEVEL_LOCK_MODES: tuple[tuple[str, str], ...] = (
+    ("auto_set", "Intelligence mode"),
+    ("super_freeze", "Quick freezing mode"),
+    ("super_cool", "Quick refrigerating mode"),
+    ("eco", "Eco"),
+)
+
+
+def target_level_locked(status: Mapping[str, Any]) -> str | None:
+    """The name of the active mode that locks the target level, or ``None`` if it is writable."""
+    for key, label in TARGET_LEVEL_LOCK_MODES:
+        if status.get(key):
+            return label
+    return None

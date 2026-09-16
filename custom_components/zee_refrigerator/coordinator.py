@@ -186,12 +186,17 @@ class HaierFridgeCoordinator(DataUpdateCoordinator[FridgeStatus]):
                 f"current operating mode)."
             )
 
-        # The fridge echoes its updated status on the op's own connection; use it when it
-        # decodes so the new state shows immediately instead of waiting for the next poll.
-        status = next(
-            (decode(blob, self.layout) for blob in blobs if len(blob) == self.status_len),
-            None,
-        )
+        # The op connection carries the fridge's routine status push FIRST (pre-change) and the
+        # accepted answer (a fresh status report) after it, so decode NEWEST-first — taking the
+        # first would show the pre-change state until the next poll.
+        status = None
+        for blob in reversed(blobs):
+            if len(blob) != self.status_len:
+                continue
+            status = decode(blob, self.layout)
+            if status is not None:
+                self.last_raw_status = blob.hex()
+                break
         if status is not None:
             self.async_set_updated_data(status)
         else:

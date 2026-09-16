@@ -14,6 +14,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, MANUFACTURER, TARGET_LEVEL_MAX, TARGET_LEVEL_MIN
+from .control import target_level_locked
 from .coordinator import HaierFridgeCoordinator
 
 
@@ -49,6 +50,24 @@ class FridgeTargetLevel(CoordinatorEntity[HaierFridgeCoordinator], NumberEntity)
         if self.coordinator.data is None:
             return None
         return self.coordinator.data.get("target_level")
+
+    @property
+    def available(self) -> bool:
+        """Disabled while a mode is active — the fridge refuses a target change then.
+
+        Haier's own device config declares this: each of Eco / Auto Set / Super Freeze /
+        Super Cool sets ``refrigeratorTargetTempLevel`` to non-writable while it is on.
+        """
+        if not super().available:
+            return False
+        data = self.coordinator.data
+        return data is None or target_level_locked(data) is None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str] | None:
+        data = self.coordinator.data
+        locked = target_level_locked(data) if data is not None else None
+        return {"locked_by": locked} if locked else None
 
     async def async_set_native_value(self, value: float) -> None:
         await self.coordinator.async_set_control("target_level", int(value))

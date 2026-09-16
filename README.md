@@ -43,6 +43,10 @@ Control is sent locally over the same uSS connection as monitoring: one EPP fram
 setting, naming the attribute with the id from Haier's own byte map for this device class.
 The fridge answers with a status report that confirms the new value.
 
+**Note:** the target level is **disabled while any mode is on** (Eco, Auto Set, Super Freeze
+or Super Cool) — the fridge itself refuses a manual target change in those modes, and the
+manufacturer's device map declares it. Turn the mode off first to set the level.
+
 All entities live under one **device** in Home Assistant, and a full **diagnostics
 download** is included for bug reports.
 
