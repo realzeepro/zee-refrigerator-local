@@ -65,7 +65,7 @@ download** is included for bug reports.
 ### Via HACS (custom repository)
 1. HACS → Integrations → ⋮ → **Custom repositories**
 2. Add `https://github.com/realzeepro/zee-refrigerator-local`, category **Integration**
-3. Install **Zee Refrigerator (Local, Monitoring)**
+3. Install **Zee Refrigerator (Local)**
 4. Restart Home Assistant
 
 ### Manual
