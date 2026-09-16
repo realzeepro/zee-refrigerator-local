@@ -1,5 +1,5 @@
 {
-  "name": "Zee Refrigerator (Local, Monitoring)",
+  "name": "Zee Refrigerator (Local)",
   "render_readme": true,
   "zip_release": false,
   "homeassistant": "2024.1.0"
