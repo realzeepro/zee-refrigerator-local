@@ -8,6 +8,7 @@ the user to re-key by hand via Settings > Devices > Zee Refrigerator > Configure
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import replace
@@ -17,7 +18,7 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
@@ -40,11 +41,18 @@ from .const import (
     DOMAIN,
     GATEWAY_TIMEOUT,
     MODEL,
+    WRITE_TIMEOUT,
 )
+from .control import build_write_frame
 from .decode import FridgeStatus, build_layout, decode, default_layout
 from .vendor.haismart_extractor import GatewayCreds, GatewayError, HaierCloud, get_localkey_via_gateway
 from .vendor.haismart_extractor.cloud import SEA_APP_CREDENTIALS, CloudError
-from .vendor.haismart_hrdp import LocalKeyRotated, async_read_status
+from .vendor.haismart_hrdp import (
+    LocalKeyRotated,
+    async_read_status,
+    async_send_op,
+    reply_refused,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -55,10 +63,11 @@ ISSUE_KEY_REFRESH_FAILED = "key_refresh_failed"
 class HaierFridgeCoordinator(DataUpdateCoordinator[FridgeStatus]):
     """Polls the fridge's local uSS/HRDP status report every scan interval.
 
-    Read-only for appliance *control*: this coordinator never writes fridge settings —
-    local writes are not honoured by this fridge's firmware (see project notes). It
-    does, however, write a refreshed local key back to its own config entry when the
-    fridge rotates its key and a cloud account is configured to auto-heal that.
+    Reads the appliance on each poll and writes settings on demand
+    (:meth:`async_set_control`), both over the same local protocol. The fridge accepts
+    only one connection at a time, so reads and writes are serialised on a lock. It also
+    writes a refreshed local key back to its own config entry when the fridge rotates its
+    key and a cloud account is configured to auto-heal that.
     """
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -77,6 +86,9 @@ class HaierFridgeCoordinator(DataUpdateCoordinator[FridgeStatus]):
         self.localkey_version: int | None = entry.data.get(CONF_LOCALKEY_VERSION)
         self.last_raw_status: str | None = None
         self.seen_lengths: list[int] = []
+        # The fridge accepts ONE local connection at a time, so a poll and a control op
+        # must never overlap — every session (read or write) is serialised on this lock.
+        self._session = asyncio.Lock()
 
         options = entry.options
         self.status_len = int(options.get(CONF_STATUS_LEN, DEFAULT_STATUS_LEN))
@@ -97,13 +109,14 @@ class HaierFridgeCoordinator(DataUpdateCoordinator[FridgeStatus]):
 
     async def _async_update_data(self) -> FridgeStatus:
         try:
-            blobs = await async_read_status(
-                self.host,
-                self.device_id,
-                self.local_key,
-                timeout=DEFAULT_TIMEOUT,
-                expect_localkey_version=self.localkey_version,
-            )
+            async with self._session:
+                blobs = await async_read_status(
+                    self.host,
+                    self.device_id,
+                    self.local_key,
+                    timeout=DEFAULT_TIMEOUT,
+                    expect_localkey_version=self.localkey_version,
+                )
         except LocalKeyRotated as exc:
             if not await self._async_gateway_refresh():
                 self._raise_stale_localkey_issue(self.localkey_version, exc.device_version)
@@ -116,13 +129,14 @@ class HaierFridgeCoordinator(DataUpdateCoordinator[FridgeStatus]):
             self.clear_stale_localkey_issue()
             # Retry once, now with the freshly refreshed key.
             try:
-                blobs = await async_read_status(
-                    self.host,
-                    self.device_id,
-                    self.local_key,
-                    timeout=DEFAULT_TIMEOUT,
-                    expect_localkey_version=self.localkey_version,
-                )
+                async with self._session:
+                    blobs = await async_read_status(
+                        self.host,
+                        self.device_id,
+                        self.local_key,
+                        timeout=DEFAULT_TIMEOUT,
+                        expect_localkey_version=self.localkey_version,
+                    )
             except (OSError, TimeoutError, RuntimeError) as retry_exc:
                 raise UpdateFailed(
                     f"Key was refreshed but the retry still failed: {retry_exc}"
@@ -150,6 +164,79 @@ class HaierFridgeCoordinator(DataUpdateCoordinator[FridgeStatus]):
                 f"Options, or open an issue with the diagnostics download."
             )
         return status
+
+    async def async_set_control(self, name: str, value: Any) -> None:
+        """Send one local control write, then refresh the fridge's state.
+
+        ``name`` is one of the keys in :data:`const.WRITE_COMMANDS`. Raises
+        ``HomeAssistantError`` if the model publishes no write id for it, if the
+        fridge refuses the command (frameType 0x03), or on a connection failure.
+        Re-keys and retries once if the local key rotated, like the read path.
+        """
+        try:
+            frame = build_write_frame(name, value)
+        except ValueError as exc:
+            raise HomeAssistantError(f"Cannot set {name}: {exc}") from exc
+
+        blobs = await self._async_send_control_frame(name, frame)
+
+        if reply_refused(blobs):
+            raise HomeAssistantError(
+                f"The fridge refused to change {name} (it may be locked out in its "
+                f"current operating mode)."
+            )
+
+        # The fridge echoes its updated status on the op's own connection; use it when it
+        # decodes so the new state shows immediately instead of waiting for the next poll.
+        status = next(
+            (decode(blob, self.layout) for blob in blobs if len(blob) == self.status_len),
+            None,
+        )
+        if status is not None:
+            self.async_set_updated_data(status)
+        else:
+            await self.async_request_refresh()
+
+    async def _async_send_control_frame(self, name: str, frame: bytes) -> list[bytes]:
+        """Run one control session, re-keying and retrying once on a key rotation."""
+        try:
+            async with self._session:
+                return await async_send_op(
+                    self.host,
+                    self.device_id,
+                    self.local_key,
+                    frame,
+                    counter=1,
+                    timeout=WRITE_TIMEOUT,
+                    expect_localkey_version=self.localkey_version,
+                )
+        except LocalKeyRotated as exc:
+            if not await self._async_gateway_refresh():
+                self._raise_stale_localkey_issue(self.localkey_version, exc.device_version)
+                raise HomeAssistantError(
+                    f"The fridge's local key rotated while setting {name}; no cloud "
+                    f"auto-refresh succeeded — re-key under Configure."
+                ) from exc
+            self.clear_stale_localkey_issue()
+            try:
+                async with self._session:
+                    return await async_send_op(
+                        self.host,
+                        self.device_id,
+                        self.local_key,
+                        frame,
+                        counter=1,
+                        timeout=WRITE_TIMEOUT,
+                        expect_localkey_version=self.localkey_version,
+                    )
+            except (OSError, TimeoutError, RuntimeError) as again:
+                raise HomeAssistantError(
+                    f"Could not set {name} (after re-keying): {again}"
+                ) from again
+        except (OSError, TimeoutError, RuntimeError) as exc:
+            raise HomeAssistantError(
+                f"Could not reach the fridge to set {name}: {exc}"
+            ) from exc
 
     async def _async_gateway_refresh(self) -> bool:
         """Fetch the current local key from the cloud MQTT gateway and update it in place.

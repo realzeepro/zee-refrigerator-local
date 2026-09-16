@@ -1,9 +1,8 @@
 """Binary sensor entities for the Zee Refrigerator integration.
 
-Modes (Eco / Auto Set / Super Cool / Super Freeze) are exposed as binary sensors,
-not switches, because this integration is read-only: the fridge's firmware does
-not accept local writes for this device family (see repo README). If you want to
-toggle these from Home Assistant, do it via the Haismart app for now.
+Only the two door state readings are binary sensors. The writable modes (Eco / Auto
+Set / Super Cool / Super Freeze) are exposed as switches instead, since the fridge
+honours local writes for them (see switch.py).
 """
 from __future__ import annotations
 
@@ -43,26 +42,6 @@ BINARY_SENSOR_TYPES: tuple[FridgeBinarySensorDescription, ...] = (
         translation_key="freezer_door",
         device_class=BinarySensorDeviceClass.DOOR,
         value_fn=lambda s: s["freezer_door_open"],
-    ),
-    FridgeBinarySensorDescription(
-        key="eco_mode",
-        translation_key="eco_mode",
-        value_fn=lambda s: s["eco"],
-    ),
-    FridgeBinarySensorDescription(
-        key="auto_set_mode",
-        translation_key="auto_set_mode",
-        value_fn=lambda s: s["auto_set"],
-    ),
-    FridgeBinarySensorDescription(
-        key="super_freeze",
-        translation_key="super_freeze",
-        value_fn=lambda s: s["super_freeze"],
-    ),
-    FridgeBinarySensorDescription(
-        key="super_cool",
-        translation_key="super_cool",
-        value_fn=lambda s: s["super_cool"],
     ),
 )
 

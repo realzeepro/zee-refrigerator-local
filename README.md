@@ -4,8 +4,9 @@ A **HACS custom integration for Home Assistant** that monitors a **Haier 538 IOT
 HRF-538TIFB1U1** refrigerator (Haismart / Haier U+ appliances) **locally** over the
 uSS/HRDP protocol — **no cloud polling** after setup.
 
-- **Read-only / monitoring:** temperatures, doors, and operating mode, straight from
-  the fridge on your LAN.
+- **Monitor and control:** temperatures, doors and operating mode, plus the fridge's
+  writable settings (target level, Eco, Super Cool, Super Freeze, Auto Set) — all straight
+  from the fridge on your LAN.
 - **No cloud dependency at runtime** — the fridge is polled directly over the local
   network; Haier's cloud is only used once (to fetch the local key) and to
   auto-refresh the key when it rotates.
@@ -28,10 +29,19 @@ uSS/HRDP protocol — **no cloud polling** after setup.
 **Binary sensors**
 - Fridge door (open/closed)
 - Freezer door (open/closed)
-- Eco mode
-- Auto Set mode
-- Super Freeze
-- Super Cool
+
+**Number**
+- Target temp level (2–10, where 2 = 1 °C and 10 = 9 °C)
+
+**Switches**
+- Eco
+- Quick refrigerating mode (速冷)
+- Quick freezing mode (速冻)
+- Intelligence mode (人工智慧)
+
+Control is sent locally over the same uSS connection as monitoring: one EPP frame per
+setting, naming the attribute with the id from Haier's own byte map for this device class.
+The fridge answers with a status report that confirms the new value.
 
 All entities live under one **device** in Home Assistant, and a full **diagnostics
 download** is included for bug reports.
@@ -186,7 +196,7 @@ and diffing the bytes across captures to isolate which byte/bit changed.
 |---|---|---|
 | 92 | Fridge actual temp | `byte − 38` °C |
 | 93 | Freezer actual temp | `byte − 38` °C |
-| 98 | Fridge target temp | `(byte + 1) / 2` °C |
+| 98 | Fridge target level | `byte` (2–10; panel °C = `level − 1`) |
 | 99 | Freezer target temp | `byte / 2 − 26` °C |
 | 104 | Mode flags | bit2 = Eco |
 | 105 | Mode flags | bit1 = Auto Set, bit3 = Super Freeze, bit4 = Super Cool |

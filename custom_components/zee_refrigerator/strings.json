@@ -100,11 +100,16 @@
     },
     "binary_sensor": {
       "fridge_door": { "name": "Fridge door" },
-      "freezer_door": { "name": "Freezer door" },
-      "eco_mode": { "name": "Eco mode" },
-      "auto_set_mode": { "name": "Auto set mode" },
-      "super_freeze": { "name": "Super freeze" },
-      "super_cool": { "name": "Super cool" }
+      "freezer_door": { "name": "Freezer door" }
+    },
+    "number": {
+      "target_level": { "name": "Target temp level" }
+    },
+    "switch": {
+      "eco": { "name": "Eco" },
+      "super_cool": { "name": "Quick refrigerating mode" },
+      "super_freeze": { "name": "Quick freezing mode" },
+      "auto_set": { "name": "Intelligence mode" }
     }
   }
 }

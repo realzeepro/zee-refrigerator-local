@@ -17,7 +17,7 @@ needed.
 Byte map for the default 538 layout (0-indexed):
     92   fridge actual temp   = byte - 38          (°C)
     93   freezer actual temp  = byte - 38           (°C)
-    98   fridge target temp   = (byte + 1) / 2       (°C)
+    98   fridge target level  = byte (2..10)        (panel: °C = level - 1)
     99   freezer target temp  = byte / 2 - 26        (°C)
     104  mode flags           bit2 = Eco
     105  mode flags           bit1 = Auto Set, bit3 = Super Freeze, bit4 = Super Cool
@@ -35,6 +35,7 @@ _LAYOUT_FIELDS = (
     "freezer_temp",
     "fridge_target",
     "freezer_target",
+    "target_level",
     "eco",
     "auto_set",
     "super_freeze",
@@ -45,13 +46,20 @@ _LAYOUT_FIELDS = (
 
 
 def default_layout() -> dict[str, Any]:
-    """The layout the HRF-538TIFB1U1 was tested with, as a fresh dict (never mutated)."""
+    """The layout the HRF-538TIFB1U1 was tested with, as a fresh dict (never mutated).
+
+    Byte 98 holds the fridge's target *level* (2..10, the manufacturer's own byte map
+    places ``refrigeratorTargetTempLevel`` at word 4). The panel shows level 2 = 1 °C,
+    3 = 2 °C, ... 10 = 9 °C, so the temperature is ``level - 1``. ``target_level`` keeps
+    the raw level, which is the value the control (eppCmd 5D02) is set with.
+    """
     return {
         "status_len": DEFAULT_STATUS_LEN,
         "fridge_temp": {"offset": 92, "scale": 1.0, "shift": -38.0, "min": -60.0, "max": 60.0},
         "freezer_temp": {"offset": 93, "scale": 1.0, "shift": -38.0, "min": -60.0, "max": 30.0},
-        "fridge_target": {"offset": 98, "scale": 0.5, "shift": 0.5, "min": -20.0, "max": 30.0},
+        "fridge_target": {"offset": 98, "scale": 1.0, "shift": -1.0, "min": -20.0, "max": 30.0},
         "freezer_target": {"offset": 99, "scale": 0.5, "shift": -26.0, "min": -40.0, "max": 15.0},
+        "target_level": {"offset": 98, "scale": 1.0, "shift": 0.0, "min": 1.0, "max": 11.0},
         "eco": {"offset": 104, "mask": 0x04},
         "auto_set": {"offset": 105, "mask": 0x02},
         "super_freeze": {"offset": 105, "mask": 0x08},
@@ -90,6 +98,7 @@ class FridgeStatus(TypedDict):
     freezer_temp_c: float
     fridge_target_c: float
     freezer_target_c: float
+    target_level: int | None
     fridge_door_open: bool
     freezer_door_open: bool
     eco: bool
@@ -140,6 +149,11 @@ def decode(
     if None in (fridge_temp, freezer_temp, fridge_target, freezer_target):
         return None
 
+    # The raw target level (the value 5D02 sets). Optional: a layout without it degrades
+    # to "unknown" rather than failing the whole decode.
+    level = _read_temp(blob, layout["target_level"])
+    target_level = round(level) if level is not None else None
+
     flags = {
         "eco": _read_flag(blob, layout["eco"]),
         "auto_set": _read_flag(blob, layout["auto_set"]),
@@ -157,6 +171,7 @@ def decode(
         freezer_temp_c=freezer_temp,
         fridge_target_c=fridge_target,
         freezer_target_c=freezer_target,
+        target_level=target_level,
         fridge_door_open=_read_flag(blob, layout["fridge_door"]),
         freezer_door_open=_read_flag(blob, layout["freezer_door"]),
         eco=flags["eco"],

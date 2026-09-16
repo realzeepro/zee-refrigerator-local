@@ -23,6 +23,24 @@ GATEWAY_TIMEOUT = 8.0  # seconds; TLS connect + one round trip to the cloud MQTT
 
 DEFAULT_SCAN_INTERVAL = 30  # seconds; matches the fridge's single-session poll cadence
 DEFAULT_TIMEOUT = 8.0  # seconds per read cycle
+WRITE_TIMEOUT = 5.0  # seconds per control session (handshake + one op + reply)
+
+# Writable attributes -> Haier's own single-parameter write id ("eppCmd"), taken from the
+# manufacturer's byte map for this device class (0102400W / product code BL046RE00; the
+# map's own name is "0061801294CHNR"). A control is sent locally as one EPP frame:
+#   build_epp_frame(0x01, eppCmd, value.to_bytes(2, "big"))
+# The fridge acks it with a frameType 0x02 status report and refuses with 0x03.
+WRITE_COMMANDS: dict[str, str] = {
+    "target_level": "5D02",  # refrigeratorTargetTempLevel (level 2..10)
+    "eco": "5D30",  # energySavingStatus (ECO)
+    "super_cool": "5D24",  # quickRefrigeratingMode (速冷)
+    "super_freeze": "5D21",  # quickFreezingMode (速冻)
+    "auto_set": "5D20",  # intelligenceMode (人工智慧)
+}
+
+# The target level the fridge accepts via 5D02 (2 = 1 °C ... 10 = 9 °C).
+TARGET_LEVEL_MIN = 2
+TARGET_LEVEL_MAX = 10
 
 MANUFACTURER = "Haier"
 # This layout was derived against a single unit. If your fridge reports

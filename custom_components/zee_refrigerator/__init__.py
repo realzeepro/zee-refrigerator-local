@@ -1,12 +1,13 @@
-"""Zee Refrigerator (local, monitoring-only) integration.
+"""Zee Refrigerator (local) integration.
 
 Talks to the fridge over Haier's local uSS/HRDP protocol (port 56800) — the same
 protocol family Haismart-local uses for AC units, but with a different status
 report layout specific to this refrigerator's device class (0102400W).
 
-This integration is READ-ONLY. The fridge's firmware does not honour local writes
-for this device family; see the project notes in the repo README for what was
-tried. Only sensors and binary sensors are provided.
+Monitoring is read-only; control is local too: the fridge accepts single-parameter
+writes as EPP frames over the same connection (see control.py). Sensors,
+binary sensors (doors), a number (target level) and switches (Eco / Super Cool /
+Super Freeze / Auto Set) are provided.
 """
 from __future__ import annotations
 
@@ -17,7 +18,12 @@ from homeassistant.core import HomeAssistant
 from .const import DOMAIN
 from .coordinator import HaierFridgeCoordinator
 
-PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.BINARY_SENSOR]
+PLATFORMS: list[Platform] = [
+    Platform.SENSOR,
+    Platform.BINARY_SENSOR,
+    Platform.NUMBER,
+    Platform.SWITCH,
+]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
