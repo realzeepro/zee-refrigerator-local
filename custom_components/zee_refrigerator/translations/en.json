@@ -103,7 +103,7 @@
       "freezer_door": { "name": "Freezer door" }
     },
     "number": {
-      "target_level": { "name": "Target temp level" }
+      "target_level": { "name": "Target temperature" }
     },
     "switch": {
       "eco": { "name": "Eco" },

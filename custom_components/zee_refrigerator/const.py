@@ -42,6 +42,11 @@ WRITE_COMMANDS: dict[str, str] = {
 TARGET_LEVEL_MIN = 2
 TARGET_LEVEL_MAX = 10
 
+# The same range expressed as the fridge temperature the panel shows (°C = level − 1).
+# Control is exposed in °C so it matches the target-temperature sensor and Haier's own labels.
+TARGET_TEMP_MIN = TARGET_LEVEL_MIN - 1  # 1 °C
+TARGET_TEMP_MAX = TARGET_LEVEL_MAX - 1  # 9 °C
+
 MANUFACTURER = "Haier"
 # This layout was derived against a single unit. If your fridge reports
 # different values, please open an issue with a raw status capture.

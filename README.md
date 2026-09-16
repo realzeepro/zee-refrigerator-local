@@ -5,7 +5,7 @@ HRF-538TIFB1U1** refrigerator (Haismart / Haier U+ appliances) **locally** over 
 uSS/HRDP protocol — **no cloud polling** after setup.
 
 - **Monitor and control:** temperatures, doors and operating mode, plus the fridge's
-  writable settings (target level, Eco, Super Cool, Super Freeze, Auto Set) — all straight
+  writable settings (target temperature, Eco, Super Cool, Super Freeze, Auto Set) — all straight
   from the fridge on your LAN.
 - **No cloud dependency at runtime** — the fridge is polled directly over the local
   network; Haier's cloud is only used once (to fetch the local key) and to
@@ -31,7 +31,7 @@ uSS/HRDP protocol — **no cloud polling** after setup.
 - Freezer door (open/closed)
 
 **Number**
-- Target temp level (2–10, where 2 = 1 °C and 10 = 9 °C)
+- Target temperature (1–9 °C)
 
 **Switches**
 - Eco
@@ -43,9 +43,9 @@ Control is sent locally over the same uSS connection as monitoring: one EPP fram
 setting, naming the attribute with the id from Haier's own byte map for this device class.
 The fridge answers with a status report that confirms the new value.
 
-**Note:** the target level is **disabled while any mode is on** (Eco, Auto Set, Super Freeze
-or Super Cool) — the fridge itself refuses a manual target change in those modes, and the
-manufacturer's device map declares it. Turn the mode off first to set the level.
+**Note:** the target temperature is **disabled while any mode is on** (Eco, Auto Set, Super
+Freeze or Super Cool) — the fridge itself refuses a manual target change in those modes, and
+the manufacturer's device map declares it. Turn the mode off first to set the temperature.
 
 All entities live under one **device** in Home Assistant, and a full **diagnostics
 download** is included for bug reports.

@@ -1,19 +1,20 @@
-"""Number entity: the fridge's target temperature level.
+"""Number entity: the fridge's target temperature.
 
-The fridge is controlled by a *level* (2..10, where 2 = 1 °C and 10 = 9 °C), which is
-what Haier's own app exposes and what the local write id (``5D02``) sets. The level is
-kept as-is rather than converted to °C so the value on the wire matches the value shown.
+The fridge is written by a *level* (2..10, where 2 = 1 °C and 10 = 9 °C) via local write
+id ``5D02``. This entity exposes the same setting in **°C** (1..9) so it matches the
+target-temperature sensor and Haier's own labels; the level is ``°C + 1`` on the wire.
 """
 from __future__ import annotations
 
-from homeassistant.components.number import NumberEntity, NumberMode
+from homeassistant.components.number import NumberDeviceClass, NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, MANUFACTURER, TARGET_LEVEL_MAX, TARGET_LEVEL_MIN
+from .const import DOMAIN, MANUFACTURER, TARGET_TEMP_MAX, TARGET_TEMP_MIN
 from .control import target_level_locked
 from .coordinator import HaierFridgeCoordinator
 
@@ -22,17 +23,20 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     coordinator: HaierFridgeCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([FridgeTargetLevel(coordinator)])
+    async_add_entities([FridgeTargetTemperature(coordinator)])
 
 
-class FridgeTargetLevel(CoordinatorEntity[HaierFridgeCoordinator], NumberEntity):
-    """The fridge's target level (2..10)."""
+class FridgeTargetTemperature(CoordinatorEntity[HaierFridgeCoordinator], NumberEntity):
+    """The fridge's target temperature in °C (1..9)."""
 
     _attr_has_entity_name = True
+    # Key is the wire attribute's own name; the entity is named "Target temperature".
     _attr_translation_key = "target_level"
-    _attr_native_min_value = TARGET_LEVEL_MIN
-    _attr_native_max_value = TARGET_LEVEL_MAX
+    _attr_native_min_value = TARGET_TEMP_MIN
+    _attr_native_max_value = TARGET_TEMP_MAX
     _attr_native_step = 1
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_device_class = NumberDeviceClass.TEMPERATURE
     _attr_mode = NumberMode.BOX
 
     def __init__(self, coordinator: HaierFridgeCoordinator) -> None:
@@ -47,9 +51,13 @@ class FridgeTargetLevel(CoordinatorEntity[HaierFridgeCoordinator], NumberEntity)
 
     @property
     def native_value(self) -> float | None:
-        if self.coordinator.data is None:
+        data = self.coordinator.data
+        if data is None:
             return None
-        return self.coordinator.data.get("target_level")
+        level = data.get("target_level")
+        if level is not None:
+            return level - 1  # °C = level − 1
+        return data.get("fridge_target_c")
 
     @property
     def available(self) -> bool:
@@ -70,4 +78,5 @@ class FridgeTargetLevel(CoordinatorEntity[HaierFridgeCoordinator], NumberEntity)
         return {"locked_by": locked} if locked else None
 
     async def async_set_native_value(self, value: float) -> None:
-        await self.coordinator.async_set_control("target_level", int(value))
+        # °C in, level on the wire: level = °C + 1.
+        await self.coordinator.async_set_control("target_level", int(round(value)) + 1)
