@@ -87,7 +87,7 @@
     },
     "key_refresh_failed": {
       "title": "Zee Refrigerator: automatic re-key failed",
-      "description": "The fridge's local key rotated (was v{old}, now v{new}) and the linked Haier account could not fetch a fresh one. Check the account credentials under Settings > Devices & services > {name} > Configure, or paste the current key by hand."
+      "description": "The fridge's local key rotated (was v{old}, now v{new}) and the linked Haier account could not fetch a fresh one. The integration keeps retrying in the background and this clears on its own once the fetch succeeds. If it persists, check the account credentials under Settings > Devices & services > {name} > Configure, or paste the current key by hand."
     }
   },
   "entity": {

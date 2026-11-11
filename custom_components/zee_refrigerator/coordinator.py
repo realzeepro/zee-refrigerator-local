@@ -18,7 +18,7 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
@@ -120,11 +120,14 @@ class HaierFridgeCoordinator(DataUpdateCoordinator[FridgeStatus]):
         except LocalKeyRotated as exc:
             if not await self._async_gateway_refresh():
                 self._raise_stale_localkey_issue(self.localkey_version, exc.device_version)
-                raise ConfigEntryAuthFailed(
-                    "The fridge's local key has rotated and no cloud auto-refresh "
-                    "succeeded. Add a Haier account under Settings > Devices > "
-                    "Zee Refrigerator > Configure so future rotations heal "
-                    "automatically, or re-fetch and paste in the current key by hand."
+                # UpdateFailed, NOT ConfigEntryAuthFailed: a transient cloud/gateway hiccup must
+                # not park the whole entry until a manual reload. UpdateFailed keeps the
+                # coordinator polling, so the next cycle retries the refresh and self-heals;
+                # the repair issue stays visible meanwhile.
+                raise UpdateFailed(
+                    f"The fridge's local key rotated (v{self.localkey_version} -> "
+                    f"v{exc.device_version}) and the automatic refresh did not succeed; "
+                    f"retrying next cycle."
                 ) from exc
             self.clear_stale_localkey_issue()
             # Retry once, now with the freshly refreshed key.
@@ -163,6 +166,9 @@ class HaierFridgeCoordinator(DataUpdateCoordinator[FridgeStatus]):
                 f"This model's report layout may differ — set the byte map under "
                 f"Options, or open an issue with the diagnostics download."
             )
+        # A successful read means the key in hand is current: clear any stale re-key repair
+        # issue left over from an earlier rotation (e.g. one the user fixed by hand).
+        self.clear_stale_localkey_issue()
         return status
 
     async def async_set_control(self, name: str, value: Any) -> None:
@@ -243,11 +249,16 @@ class HaierFridgeCoordinator(DataUpdateCoordinator[FridgeStatus]):
                 f"Could not reach the fridge to set {name}: {exc}"
             ) from exc
 
-    async def _async_gateway_refresh(self) -> bool:
+    async def _async_gateway_refresh(self, attempts: int = 3) -> bool:
         """Fetch the current local key from the cloud MQTT gateway and update it in place.
 
-        Returns True on success (key updated on self and persisted to the config entry,
-        so the next read uses it); False if no account is configured or any step fails.
+        Returns True on success (key updated on self and persisted to the config entry, so the
+        next read uses it); False if no account is configured or every attempt fails.
+
+        Retried a few times on purpose: the token exchange and the gateway round trip are
+        network calls, and a single transient failure used to surface as a permanent repair
+        issue (the entry then stopped polling). Retrying here — plus polling again next cycle
+        — lets a rotation heal on its own.
         """
         data = self.entry.data
         usdk_client_id = data.get(CONF_CLOUD_CLIENT_ID)
@@ -256,41 +267,63 @@ class HaierFridgeCoordinator(DataUpdateCoordinator[FridgeStatus]):
             return False  # no cloud account configured for this entry
 
         access_token = data.get(CONF_ACCESS_TOKEN)
-        try:
-            cloud = HaierCloud(
-                replace(SEA_APP_CREDENTIALS, client_id=usdk_client_id),
-                access_token or "",
-                zone_info=data.get(CONF_ZONE_INFO, "0"),
-                transport=async_cloud_transport(self.hass),
-            )
-            access_token = (await cloud.refresh_token(refresh_token)).access_token
-        except (CloudError, OSError, RuntimeError) as err:
-            _LOGGER.warning("Cloud token refresh failed (%s)", err)
-            if not access_token:
-                return False  # nothing usable to try the gateway with
+        for attempt in range(1, attempts + 1):
+            # Mint a fresh access token (the stored one is short-lived). If this fails but we
+            # still hold an access token, fall through and try the gateway with it.
+            try:
+                cloud = HaierCloud(
+                    replace(SEA_APP_CREDENTIALS, client_id=usdk_client_id),
+                    access_token or "",
+                    zone_info=data.get(CONF_ZONE_INFO, "0"),
+                    transport=async_cloud_transport(self.hass),
+                )
+                access_token = (await cloud.refresh_token(refresh_token)).access_token
+            except (CloudError, OSError, RuntimeError) as err:
+                _LOGGER.warning(
+                    "Cloud token refresh failed (attempt %d/%d): %s", attempt, attempts, err
+                )
+                if not access_token:
+                    if attempt < attempts:
+                        await asyncio.sleep(attempt)  # 1 s, 2 s
+                    continue
 
-        creds = GatewayCreds.derive(usdk_client_id=usdk_client_id, access_token=access_token)
-        try:
-            local_key = await self.hass.async_add_executor_job(
-                partial(get_localkey_via_gateway, creds, self.device_id, timeout=GATEWAY_TIMEOUT)
-            )
-        except (GatewayError, OSError, RuntimeError) as err:
-            _LOGGER.warning("Gateway local key refresh failed for %s: %s", self.device_id, err)
-            return False
+            creds = GatewayCreds.derive(usdk_client_id=usdk_client_id, access_token=access_token)
+            try:
+                local_key = await self.hass.async_add_executor_job(
+                    partial(
+                        get_localkey_via_gateway,
+                        creds,
+                        self.device_id,
+                        timeout=GATEWAY_TIMEOUT,
+                    )
+                )
+            except (GatewayError, OSError, RuntimeError) as err:
+                _LOGGER.warning(
+                    "Gateway local key refresh failed for %s (attempt %d/%d): %s",
+                    self.device_id,
+                    attempt,
+                    attempts,
+                    err,
+                )
+                if attempt < attempts:
+                    await asyncio.sleep(attempt)
+                continue
 
-        self.local_key = local_key.key
-        self.localkey_version = local_key.version
-        updates: dict[str, Any] = {
-            CONF_LOCAL_KEY: local_key.key,
-            CONF_LOCALKEY_VERSION: local_key.version,
-        }
-        if access_token and access_token != data.get(CONF_ACCESS_TOKEN):
-            updates[CONF_ACCESS_TOKEN] = access_token
-        self.hass.config_entries.async_update_entry(
-            self.entry, data={**data, **updates}
-        )
-        _LOGGER.info("Local key auto-refreshed via the cloud gateway for %s", self.device_id)
-        return True
+            self.local_key = local_key.key
+            self.localkey_version = local_key.version
+            updates: dict[str, Any] = {
+                CONF_LOCAL_KEY: local_key.key,
+                CONF_LOCALKEY_VERSION: local_key.version,
+            }
+            if access_token and access_token != data.get(CONF_ACCESS_TOKEN):
+                updates[CONF_ACCESS_TOKEN] = access_token
+            self.hass.config_entries.async_update_entry(
+                self.entry, data={**data, **updates}
+            )
+            _LOGGER.info("Local key auto-refreshed via the cloud gateway for %s", self.device_id)
+            return True
+
+        return False
 
     def _raise_stale_localkey_issue(self, old: int | None, current: Any) -> None:
         has_account = bool(self.entry.data.get(CONF_REFRESH_TOKEN))
