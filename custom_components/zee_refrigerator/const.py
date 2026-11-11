@@ -21,6 +21,11 @@ CONF_ZONE_INFO = "zone_info"
 
 GATEWAY_TIMEOUT = 8.0  # seconds; TLS connect + one round trip to the cloud MQTT gateway
 
+# Minimum seconds between cloud re-key attempts after the fridge rotates its local key. The
+# coordinator also retries on every poll, so this only ever *raises* the spacing (a short poll
+# interval can't hammer Haier's cloud). 15 s is the floor.
+REKEY_MIN_INTERVAL = 15.0
+
 DEFAULT_SCAN_INTERVAL = 30  # seconds; matches the fridge's single-session poll cadence
 DEFAULT_TIMEOUT = 8.0  # seconds per read cycle
 WRITE_TIMEOUT = 5.0  # seconds per control session (handshake + one op + reply)

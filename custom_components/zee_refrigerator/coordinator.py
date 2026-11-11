@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from dataclasses import replace
 from datetime import timedelta
 from functools import partial
@@ -41,6 +42,7 @@ from .const import (
     DOMAIN,
     GATEWAY_TIMEOUT,
     MODEL,
+    REKEY_MIN_INTERVAL,
     WRITE_TIMEOUT,
 )
 from .control import build_write_frame
@@ -89,6 +91,9 @@ class HaierFridgeCoordinator(DataUpdateCoordinator[FridgeStatus]):
         # The fridge accepts ONE local connection at a time, so a poll and a control op
         # must never overlap — every session (read or write) is serialised on this lock.
         self._session = asyncio.Lock()
+        # Throttle cloud re-key attempts so a rotation can't hammer Haier's cloud when the
+        # poll interval is short (see REKEY_MIN_INTERVAL). None = never attempted.
+        self._last_rekey_attempt: float | None = None
 
         options = entry.options
         self.status_len = int(options.get(CONF_STATUS_LEN, DEFAULT_STATUS_LEN))
@@ -249,16 +254,17 @@ class HaierFridgeCoordinator(DataUpdateCoordinator[FridgeStatus]):
                 f"Could not reach the fridge to set {name}: {exc}"
             ) from exc
 
-    async def _async_gateway_refresh(self, attempts: int = 3) -> bool:
+    async def _async_gateway_refresh(self) -> bool:
         """Fetch the current local key from the cloud MQTT gateway and update it in place.
 
         Returns True on success (key updated on self and persisted to the config entry, so the
-        next read uses it); False if no account is configured or every attempt fails.
+        next read uses it); False if no account is configured, the attempt was throttled, or it
+        failed.
 
-        Retried a few times on purpose: the token exchange and the gateway round trip are
-        network calls, and a single transient failure used to surface as a permanent repair
-        issue (the entry then stopped polling). Retrying here — plus polling again next cycle
-        — lets a rotation heal on its own.
+        Throttled to one attempt every ``REKEY_MIN_INTERVAL`` seconds (15 s floor). The
+        coordinator keeps polling on its own schedule, so a rotation heals on the next cycle
+        that clears the floor — no manual reload, and no hammering Haier's cloud when the poll
+        interval is short.
         """
         data = self.entry.data
         usdk_client_id = data.get(CONF_CLOUD_CLIENT_ID)
@@ -266,64 +272,67 @@ class HaierFridgeCoordinator(DataUpdateCoordinator[FridgeStatus]):
         if not usdk_client_id or not refresh_token:
             return False  # no cloud account configured for this entry
 
-        access_token = data.get(CONF_ACCESS_TOKEN)
-        for attempt in range(1, attempts + 1):
-            # Mint a fresh access token (the stored one is short-lived). If this fails but we
-            # still hold an access token, fall through and try the gateway with it.
-            try:
-                cloud = HaierCloud(
-                    replace(SEA_APP_CREDENTIALS, client_id=usdk_client_id),
-                    access_token or "",
-                    zone_info=data.get(CONF_ZONE_INFO, "0"),
-                    transport=async_cloud_transport(self.hass),
-                )
-                access_token = (await cloud.refresh_token(refresh_token)).access_token
-            except (CloudError, OSError, RuntimeError) as err:
-                _LOGGER.warning(
-                    "Cloud token refresh failed (attempt %d/%d): %s", attempt, attempts, err
-                )
-                if not access_token:
-                    if attempt < attempts:
-                        await asyncio.sleep(attempt)  # 1 s, 2 s
-                    continue
-
-            creds = GatewayCreds.derive(usdk_client_id=usdk_client_id, access_token=access_token)
-            try:
-                local_key = await self.hass.async_add_executor_job(
-                    partial(
-                        get_localkey_via_gateway,
-                        creds,
-                        self.device_id,
-                        timeout=GATEWAY_TIMEOUT,
-                    )
-                )
-            except (GatewayError, OSError, RuntimeError) as err:
-                _LOGGER.warning(
-                    "Gateway local key refresh failed for %s (attempt %d/%d): %s",
-                    self.device_id,
-                    attempt,
-                    attempts,
-                    err,
-                )
-                if attempt < attempts:
-                    await asyncio.sleep(attempt)
-                continue
-
-            self.local_key = local_key.key
-            self.localkey_version = local_key.version
-            updates: dict[str, Any] = {
-                CONF_LOCAL_KEY: local_key.key,
-                CONF_LOCALKEY_VERSION: local_key.version,
-            }
-            if access_token and access_token != data.get(CONF_ACCESS_TOKEN):
-                updates[CONF_ACCESS_TOKEN] = access_token
-            self.hass.config_entries.async_update_entry(
-                self.entry, data={**data, **updates}
+        now = time.monotonic()
+        if (
+            self._last_rekey_attempt is not None
+            and now - self._last_rekey_attempt < REKEY_MIN_INTERVAL
+        ):
+            _LOGGER.debug(
+                "Re-key throttled: last attempt %.0fs ago (minimum %ss)",
+                now - self._last_rekey_attempt,
+                REKEY_MIN_INTERVAL,
             )
-            _LOGGER.info("Local key auto-refreshed via the cloud gateway for %s", self.device_id)
-            return True
+            return False
+        self._last_rekey_attempt = now
 
-        return False
+        access_token = data.get(CONF_ACCESS_TOKEN)
+        # Mint a fresh access token (the stored one is short-lived). If this fails but we still
+        # hold an access token, fall through and try the gateway with it.
+        try:
+            cloud = HaierCloud(
+                replace(SEA_APP_CREDENTIALS, client_id=usdk_client_id),
+                access_token or "",
+                zone_info=data.get(CONF_ZONE_INFO, "0"),
+                transport=async_cloud_transport(self.hass),
+            )
+            access_token = (await cloud.refresh_token(refresh_token)).access_token
+        except (CloudError, OSError, RuntimeError) as err:
+            _LOGGER.warning("Cloud token refresh failed (%s)", err)
+            if not access_token:
+                return False  # nothing usable to try the gateway with
+
+        creds = GatewayCreds.derive(usdk_client_id=usdk_client_id, access_token=access_token)
+        try:
+            local_key = await self.hass.async_add_executor_job(
+                partial(
+                    get_localkey_via_gateway,
+                    creds,
+                    self.device_id,
+                    timeout=GATEWAY_TIMEOUT,
+                )
+            )
+        except (GatewayError, OSError, RuntimeError) as err:
+            _LOGGER.warning(
+                "Gateway local key refresh failed for %s: %s (next attempt in >=%ss)",
+                self.device_id,
+                err,
+                REKEY_MIN_INTERVAL,
+            )
+            return False
+
+        self.local_key = local_key.key
+        self.localkey_version = local_key.version
+        updates: dict[str, Any] = {
+            CONF_LOCAL_KEY: local_key.key,
+            CONF_LOCALKEY_VERSION: local_key.version,
+        }
+        if access_token and access_token != data.get(CONF_ACCESS_TOKEN):
+            updates[CONF_ACCESS_TOKEN] = access_token
+        self.hass.config_entries.async_update_entry(
+            self.entry, data={**data, **updates}
+        )
+        _LOGGER.info("Local key auto-refreshed via the cloud gateway for %s", self.device_id)
+        return True
 
     def _raise_stale_localkey_issue(self, old: int | None, current: Any) -> None:
         has_account = bool(self.entry.data.get(CONF_REFRESH_TOKEN))

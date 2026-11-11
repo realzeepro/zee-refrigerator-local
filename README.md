@@ -154,7 +154,10 @@ What happens next depends on setup method:
 - **Linked a Haier account (recommended):** the integration silently signs in
   (using a stored, reusable token — never your saved password), fetches the current
   key from Haier's cloud gateway, updates it in its own config entry, and retries
-  the read. Nothing to do — it self-heals within one poll cycle.
+  the read. Nothing to do — it self-heals within one poll cycle. If the cloud fetch
+  fails transiently it keeps retrying on each poll, with a **15-second minimum between
+  attempts** so it never hammers Haier's cloud; the repair issue clears itself once a
+  fetch succeeds (no reload needed).
 - **Manual key entry:** there's no account to fetch a fresh key from, so a Home
   Assistant **repair issue** appears telling you the key rotated. Fix it under
   Settings → Devices & services → Zee Refrigerator → **Configure**, either by
